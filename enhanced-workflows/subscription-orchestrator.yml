@@ -1,0 +1,56 @@
+name: Subscription Orchestrator
+on:
+  repository_dispatch:
+    types: [terraform-ci, terraform-deploy]
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'Source repository'
+        required: true
+        type: string
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - ci
+          - deploy
+
+jobs:
+  terraform-ci:
+    if: github.event.inputs.action == 'ci' || github.event_name == 'repository_dispatch'
+    uses: ./.github/workflows/centralized-terraform-ci.yml
+    with:
+      repository: ${{ github.event.inputs.repository }}
+      working_directory: "environments/${{ github.event.inputs.environment }}"
+      terraform_version: '1.6.0'
+      enable_cost_analysis: true
+      enable_security_scan: true
+      enable_compliance_check: true
+    secrets:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+  terraform-deploy:
+    if: github.event.inputs.action == 'deploy' || github.event_name == 'repository_dispatch'
+    uses: ./.github/workflows/centralized-terraform-deploy.yml
+    with:
+      repository: ${{ github.event.inputs.repository }}
+      working_directory: "environments/${{ github.event.inputs.environment }}"
+      terraform_version: '1.6.0'
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      TF_STATE_RG: ${{ secrets.TF_STATE_RG }}
+      TF_STATE_SA: ${{ secrets.TF_STATE_SA }}
+      TF_STATE_CONTAINER: ${{ secrets.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+      PRODUCTION_APPROVERS: ${{ secrets.PRODUCTION_APPROVERS }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+

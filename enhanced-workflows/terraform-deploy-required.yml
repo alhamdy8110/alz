@@ -1,0 +1,41 @@
+name: terraform-deploy-required
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - development
+          - production
+      auto_approve:
+        description: 'Auto-approve deployment'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    uses: Infrastructure/infra-ci-templates/.github/workflows/terraform-deploy.yml@main
+    with:
+      working_directory: .
+      environment: ${{ github.event.inputs.environment || 'production' }}
+      auto_approve: ${{ github.event.inputs.auto_approve || false }}
+      terraform_version: '1.6.0'
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      TF_STATE_RG: ${{ secrets.TF_STATE_RG }}
+      TF_STATE_SA: ${{ secrets.TF_STATE_SA }}
+      TF_STATE_CONTAINER: ${{ secrets.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+      PRODUCTION_APPROVERS: ${{ secrets.PRODUCTION_APPROVERS }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+

@@ -1,0 +1,135 @@
+name: "Production Repository Rules"
+enforcement: "active"
+target: "branch"
+conditions:
+  repository_name:
+    - pattern: "*-prod-tf"
+rules:
+  # Pull Request Rules - Higher approval for production
+  - type: "pull_request"
+    parameters:
+      required_approving_review_count: 3
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_review: true
+      require_last_push_approval: true
+      required_review_thread_resolution: true
+  
+  # Required Status Checks
+  - type: "required_status_checks"
+    parameters:
+      required_status_checks:
+        - context: "terraform-ci"
+          integration_id: null
+        - context: "security-scan"
+          integration_id: null
+        - context: "compliance-check"
+          integration_id: null
+      strict_required_status_checks_policy: true
+  
+  # Branch Protection Rules
+  - type: "non_fast_forward"
+  
+  - type: "required_linear_history"
+  
+  - type: "required_signatures"
+  
+  # Deployment Rules - Production environment
+  - type: "required_deployments"
+    parameters:
+      required_deployment_environments:
+        - "production"
+  
+  # Branch Naming Rules
+  - type: "branch_name_pattern"
+    parameters:
+      name:
+        - pattern: "main"
+        - pattern: "hotfix/*"
+        - pattern: "release/*"
+  
+  # Commit Message Rules
+  - type: "commit_message_pattern"
+    parameters:
+      name:
+        - pattern: "^(feat|fix|docs|style|refactor|test|chore)(\\(.+\\))?: .+"
+  
+  # File Path Rules
+  - type: "file_path_restriction"
+    parameters:
+      restricted_file_paths:
+        - "*.tf"
+        - "*.tfvars"
+        - "*.tfstate"
+        - "*.tfstate.backup"
+      restricted_file_extensions:
+        - ".tf"
+        - ".tfvars"
+      restricted_file_patterns:
+        - "**/*.tf"
+        - "**/*.tfvars"
+  
+  # Workflow Rules
+  - type: "workflow"
+    parameters:
+      workflow_name:
+        - pattern: "terraform-ci"
+        - pattern: "terraform-deploy"
+        - pattern: "security-scan"
+        - pattern: "compliance-check"
+  
+  # Environment Rules
+  - type: "environment"
+    parameters:
+      environment_name:
+        - pattern: "production"
+  
+  # Repository Rules
+  - type: "repository"
+    parameters:
+      repository_name:
+        - pattern: "*-prod-tf"
+  
+  # Team Rules
+  - type: "team"
+    parameters:
+      team_name:
+        - pattern: "platform-team"
+        - pattern: "devops-team"
+        - pattern: "security-team"
+        - pattern: "architecture-team"
+  
+  # User Rules
+  - type: "user"
+    parameters:
+      user_name:
+        - pattern: "platform-admin"
+        - pattern: "devops"
+        - pattern: "platform"
+        - pattern: "architecture"
+  
+  # Additional Production-specific Rules
+  - type: "pull_request"
+    parameters:
+      required_approving_review_count: 4
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_review: true
+      require_last_push_approval: true
+      required_review_thread_resolution: true
+    conditions:
+      ref_name:
+        - pattern: "feature/prod/major-*"
+        - pattern: "feature/prod/breaking-*"
+  
+  # Emergency Production Changes
+  - type: "pull_request"
+    parameters:
+      required_approving_review_count: 2
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_review: true
+      require_last_push_approval: true
+      required_review_thread_resolution: true
+    conditions:
+      ref_name:
+        - pattern: "hotfix/prod/emergency-*"
+        - pattern: "hotfix/prod/security-*"
+

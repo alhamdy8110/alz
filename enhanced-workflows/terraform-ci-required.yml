@@ -1,0 +1,24 @@
+name: terraform-ci-required
+on:
+  pull_request:
+    branches: [main]
+  merge_group: {}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  terraform:
+    uses: Infrastructure/infra-ci-templates/.github/workflows/terraform-ci.yml@main
+    with:
+      working_directory: .
+      terraform_version: '1.6.0'
+      enable_cost_analysis: true
+      enable_security_scan: true
+      enable_compliance_check: true
+    secrets:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+

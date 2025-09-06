@@ -1,0 +1,144 @@
+name: Terraform CI
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/terraform-ci.yml'
+
+env:
+  TF_VERSION: '1.6.0'
+  TF_LOG: INFO
+
+jobs:
+  terraform-ci:
+    name: 'Terraform CI'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: |
+          terraform fmt -check -recursive -diff
+          echo "format_check_passed=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init -backend=false
+          echo "init_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Terraform Validate
+        id: validate
+        run: |
+          terraform validate
+          echo "validate_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Run TFSec Security Scan
+        id: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: .
+          soft_fail: true
+        continue-on-error: true
+      
+      - name: Run Checkov Security Scan
+        id: checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: true
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+        continue-on-error: true
+      
+      - name: Upload Checkov results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+      
+      - name: Run Infracost Cost Analysis
+        id: infracost
+        uses: infracost/infracost-gh-action@v0.12
+        with:
+          api_key: ${{ secrets.INFRACOST_API_KEY }}
+          path: .
+          terraform_plan_flags: -var-file=terraform.tfvars.example
+        continue-on-error: true
+      
+      - name: Comment PR with cost estimate
+        uses: infracost/infracost-gh-action@v0.12
+        if: github.event_name == 'pull_request'
+        with:
+          api_key: ${{ secrets.INFRACOST_API_KEY }}
+          path: .
+          terraform_plan_flags: -var-file=terraform.tfvars.example
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          behavior: update
+      
+      - name: Run Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan
+          echo "plan_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Comment PR with Terraform Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outputs.format_check_passed }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outputs.init_exit_code }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outputs.validate_exit_code }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outputs.plan_exit_code }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+        continue-on-error: true
+      
+      - name: Fail if any step failed
+        if: |
+          steps.fmt.outputs.format_check_passed != '0' ||
+          steps.init.outputs.init_exit_code != '0' ||
+          steps.validate.outputs.validate_exit_code != '0' ||
+          steps.plan.outputs.plan_exit_code != '0'
+        run: |
+          echo "One or more Terraform CI steps failed"
+          exit 1
+

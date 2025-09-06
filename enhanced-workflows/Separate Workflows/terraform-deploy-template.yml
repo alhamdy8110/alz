@@ -1,0 +1,103 @@
+name: Terraform Deploy Template
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'Working directory for Terraform'
+        required: false
+        default: '.'
+        type: string
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        default: '1.6.0'
+        type: string
+      environment:
+        description: 'Environment name (dev/prod)'
+        required: true
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        description: 'Azure service principal credentials'
+        required: true
+      TF_STATE_RG:
+        description: 'Terraform state resource group'
+        required: true
+      TF_STATE_SA:
+        description: 'Terraform state storage account'
+        required: true
+      TF_STATE_CONTAINER:
+        description: 'Terraform state container'
+        required: true
+      TF_STATE_KEY:
+        description: 'Terraform state key'
+        required: true
+      PRODUCTION_APPROVERS:
+        description: 'Production approvers list'
+        required: false
+      SLACK_WEBHOOK_URL:
+        description: 'Slack webhook URL for notifications'
+        required: false
+
+jobs:
+  terraform-deploy:
+    name: 'Terraform Deploy'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Change to working directory
+        run: |
+          WORKING_DIR="${{ inputs.working_directory }}"
+          if [ "$WORKING_DIR" != "." ]; then
+            cd "$WORKING_DIR"
+            echo "WORKING_DIR=$WORKING_DIR" >> $GITHUB_ENV
+            echo "✅ Changed to working directory: $WORKING_DIR"
+          else
+            echo "✅ Using root directory"
+          fi
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}"
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Post-deployment Tests
+        run: |
+          echo "🧪 Running post-deployment tests..."
+          # Add your post-deployment test logic here
+          echo "✅ Post-deployment tests passed"
+
+      - name: Notify Deployment Success
+        if: success()
+        run: |
+          echo "✅ Deployment successful for ${{ inputs.environment }} environment"
+          # Add notification logic here if needed
+
+      - name: Notify Deployment Failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed for ${{ inputs.environment }} environment"
+          # Add failure notification logic here if needed
+

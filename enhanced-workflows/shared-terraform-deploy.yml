@@ -1,0 +1,190 @@
+name: Terraform Deploy
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+      environment:
+        required: true
+        type: string
+      auto_approve:
+        required: false
+        type: boolean
+        default: false
+      terraform_version:
+        required: false
+        type: string
+        default: '1.6.0'
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+      TF_STATE_RG:
+        required: true
+      TF_STATE_SA:
+        required: true
+      TF_STATE_CONTAINER:
+        required: true
+      TF_STATE_KEY:
+        required: true
+      PRODUCTION_APPROVERS:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
+
+env:
+  TF_VERSION: ${{ inputs.terraform_version }}
+  TF_LOG: INFO
+  WORKING_DIR: ${{ inputs.working_directory }}
+
+jobs:
+  deploy:
+    name: 'Deploy Infrastructure'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      
+      - name: Configure Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Change to working directory
+        run: |
+          if [ "${{ env.WORKING_DIR }}" != "." ]; then
+            cd "${{ env.WORKING_DIR }}"
+            echo "WORKING_DIR=${{ env.WORKING_DIR }}" >> $GITHUB_ENV
+          fi
+      
+      - name: Set environment variables
+        run: |
+          if [ "${{ inputs.environment }}" = "development" ]; then
+            echo "TF_VAR_environment=dev" >> $GITHUB_ENV
+            echo "TF_VAR_environment_suffix=dev" >> $GITHUB_ENV
+          else
+            echo "TF_VAR_environment=prod" >> $GITHUB_ENV
+            echo "TF_VAR_environment_suffix=prod" >> $GITHUB_ENV
+          fi
+      
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}"
+      
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file="environments/${{ env.TF_VAR_environment_suffix }}/terraform.tfvars" \
+            -out=tfplan \
+            -detailed-exitcode
+        continue-on-error: true
+      
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "Terraform plan failed or detected changes"
+          echo "plan_exit_code=${{ steps.plan.outcome }}" >> $GITHUB_OUTPUT
+      
+      - name: Manual Approval for Production
+        if: |
+          inputs.auto_approve != true &&
+          inputs.environment == 'production'
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: ${{ secrets.PRODUCTION_APPROVERS }}
+          minimum-approvals: 2
+          issue-title: "Manual approval required for production deployment"
+          issue-body: |
+            Please review the Terraform plan and approve this production deployment.
+            
+            **Environment**: ${{ inputs.environment }}
+            **Branch**: ${{ github.ref }}
+            **Commit**: ${{ github.sha }}
+            **Actor**: ${{ github.actor }}
+            
+            **Terraform Plan Summary**:
+            ```
+            ${{ steps.plan.outputs.stdout }}
+            ```
+            
+            To approve this deployment, comment with: `/approve`
+            To reject this deployment, comment with: `/reject`
+      
+      - name: Terraform Apply
+        if: |
+          steps.plan.outcome == 'success' || 
+          (steps.plan.outcome == 'failure' && steps.plan.outputs.plan_exit_code == '2')
+        run: |
+          terraform apply \
+            -var-file="environments/${{ env.TF_VAR_environment_suffix }}/terraform.tfvars" \
+            -auto-approve
+      
+      - name: Run Post-Deployment Tests
+        if: steps.plan.outcome == 'success' || steps.plan.outputs.plan_exit_code == '2'
+        run: |
+          echo "🔍 Running post-deployment validation tests..."
+          
+          # Test resource accessibility
+          az resource list --resource-group ${{ secrets.TF_VAR_resource_group_name }} --output table
+          
+          # Test specific resources if they exist
+          if [ "${{ env.TF_VAR_environment_suffix }}" = "prod" ]; then
+            echo "🔍 Running production-specific tests..."
+            # Add production-specific tests here
+          fi
+          
+          echo "✅ Post-deployment tests completed"
+      
+      - name: Notify Deployment Status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#devops-alerts'
+          text: |
+            🚀 **Terraform Deployment ${{ job.status }}**
+            
+            **Environment**: ${{ inputs.environment }}
+            **Repository**: ${{ github.repository }}
+            **Branch**: ${{ github.ref }}
+            **Commit**: ${{ github.sha }}
+            **Actor**: ${{ github.actor }}
+            
+            **Workflow**: ${{ github.workflow }}
+            **Run ID**: ${{ github.run_id }}
+            
+            View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+      
+      - name: Update Deployment Status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Deployment completed successfully"
+          else
+            echo "❌ Deployment failed"
+            exit 1
+          fi
+

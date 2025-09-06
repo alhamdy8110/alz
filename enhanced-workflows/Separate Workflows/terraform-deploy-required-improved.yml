@@ -1,0 +1,35 @@
+name: terraform-deploy-required
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/terraform-deploy-required.yml'
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: 'Working directory for Terraform'
+        required: false
+        default: '.'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  terraform:
+    uses: infra-ci-templates/.github/workflows/terraform-deploy-template.yml@main
+    with:
+      working_directory: ${{ inputs.working_directory || '.' }}
+      terraform_version: '1.6.0'
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      TF_STATE_RG: ${{ secrets.TF_STATE_RG }}
+      TF_STATE_SA: ${{ secrets.TF_STATE_SA }}
+      TF_STATE_CONTAINER: ${{ secrets.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
+      PRODUCTION_APPROVERS: ${{ secrets.PRODUCTION_APPROVERS }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+

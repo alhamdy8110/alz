@@ -1,0 +1,100 @@
+name: "Development Repository Rules"
+enforcement: "active"
+target: "branch"
+conditions:
+  repository_name:
+    - pattern: "*-dev-tf"
+rules:
+  # Pull Request Rules - Lower approval for development
+  - type: "pull_request"
+    parameters:
+      required_approving_review_count: 1
+      dismiss_stale_reviews_on_push: true
+      require_code_owner_review: false
+      require_last_push_approval: true
+      required_review_thread_resolution: true
+  
+  # Required Status Checks
+  - type: "required_status_checks"
+    parameters:
+      required_status_checks:
+        - context: "terraform-ci"
+          integration_id: null
+      strict_required_status_checks_policy: true
+  
+  # Branch Protection Rules
+  - type: "non_fast_forward"
+  
+  - type: "required_linear_history"
+  
+  # Deployment Rules - Development environment
+  - type: "required_deployments"
+    parameters:
+      required_deployment_environments:
+        - "development"
+  
+  # Branch Naming Rules
+  - type: "branch_name_pattern"
+    parameters:
+      name:
+        - pattern: "main"
+        - pattern: "develop"
+        - pattern: "feature/*"
+        - pattern: "hotfix/*"
+  
+  # Commit Message Rules
+  - type: "commit_message_pattern"
+    parameters:
+      name:
+        - pattern: "^(feat|fix|docs|style|refactor|test|chore)(\\(.+\\))?: .+"
+  
+  # File Path Rules
+  - type: "file_path_restriction"
+    parameters:
+      restricted_file_paths:
+        - "*.tf"
+        - "*.tfvars"
+        - "*.tfstate"
+        - "*.tfstate.backup"
+      restricted_file_extensions:
+        - ".tf"
+        - ".tfvars"
+      restricted_file_patterns:
+        - "**/*.tf"
+        - "**/*.tfvars"
+  
+  # Workflow Rules
+  - type: "workflow"
+    parameters:
+      workflow_name:
+        - pattern: "terraform-ci"
+        - pattern: "terraform-deploy"
+        - pattern: "security-scan"
+        - pattern: "compliance-check"
+  
+  # Environment Rules
+  - type: "environment"
+    parameters:
+      environment_name:
+        - pattern: "development"
+  
+  # Repository Rules
+  - type: "repository"
+    parameters:
+      repository_name:
+        - pattern: "*-dev-tf"
+  
+  # Team Rules
+  - type: "team"
+    parameters:
+      team_name:
+        - pattern: "devops-team"
+        - pattern: "development-team"
+  
+  # User Rules
+  - type: "user"
+    parameters:
+      user_name:
+        - pattern: "devops"
+        - pattern: "developer"
+

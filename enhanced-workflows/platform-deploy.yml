@@ -1,0 +1,282 @@
+name: Platform Deploy
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'management-groups/**'
+      - 'connectivity/**'
+      - 'identity/**'
+      - 'security/**'
+      - 'modules/**'
+      - '.github/workflows/platform-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      deployment_scope:
+        description: 'Deployment scope'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - management-groups
+          - connectivity
+          - identity
+          - security
+      auto_approve:
+        description: 'Auto-approve deployment'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TF_VERSION: '1.6.0'
+  TF_LOG: INFO
+
+jobs:
+  deploy-platform:
+    name: 'Deploy Platform Infrastructure'
+    runs-on: ubuntu-latest
+    environment: platform-production
+    permissions:
+      contents: read
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      
+      - name: Configure Azure CLI
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Set deployment variables
+        run: |
+          echo "DEPLOYMENT_SCOPE=${{ github.event.inputs.deployment_scope || 'all' }}" >> $GITHUB_ENV
+          echo "AUTO_APPROVE=${{ github.event.inputs.auto_approve || 'false' }}" >> $GITHUB_ENV
+      
+      - name: Deploy Management Groups
+        if: env.DEPLOYMENT_SCOPE == 'all' || env.DEPLOYMENT_SCOPE == 'management-groups'
+        run: |
+          echo "🏗️ Deploying Management Groups..."
+          if [ -d "management-groups" ]; then
+            cd management-groups
+            
+            # Initialize Terraform
+            terraform init \
+              -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+              -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+              -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+              -backend-config="key=platform/management-groups/terraform.tfstate"
+            
+            # Plan deployment
+            terraform plan -out=mg-plan
+            
+            # Apply deployment
+            if [ "$AUTO_APPROVE" = "true" ]; then
+              terraform apply mg-plan
+            else
+              terraform apply -auto-approve mg-plan
+            fi
+            
+            echo "✅ Management Groups deployment completed"
+          else
+            echo "⚠️  No management-groups directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Deploy Connectivity
+        if: env.DEPLOYMENT_SCOPE == 'all' || env.DEPLOYMENT_SCOPE == 'connectivity'
+        run: |
+          echo "🌐 Deploying Connectivity infrastructure..."
+          if [ -d "connectivity" ]; then
+            cd connectivity
+            
+            # Initialize Terraform
+            terraform init \
+              -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+              -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+              -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+              -backend-config="key=platform/connectivity/terraform.tfstate"
+            
+            # Plan deployment
+            terraform plan -out=connectivity-plan
+            
+            # Apply deployment
+            if [ "$AUTO_APPROVE" = "true" ]; then
+              terraform apply connectivity-plan
+            else
+              terraform apply -auto-approve connectivity-plan
+            fi
+            
+            echo "✅ Connectivity deployment completed"
+          else
+            echo "⚠️  No connectivity directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Deploy Identity
+        if: env.DEPLOYMENT_SCOPE == 'all' || env.DEPLOYMENT_SCOPE == 'identity'
+        run: |
+          echo "🔐 Deploying Identity infrastructure..."
+          if [ -d "identity" ]; then
+            cd identity
+            
+            # Initialize Terraform
+            terraform init \
+              -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+              -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+              -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+              -backend-config="key=platform/identity/terraform.tfstate"
+            
+            # Plan deployment
+            terraform plan -out=identity-plan
+            
+            # Apply deployment
+            if [ "$AUTO_APPROVE" = "true" ]; then
+              terraform apply identity-plan
+            else
+              terraform apply -auto-approve identity-plan
+            fi
+            
+            echo "✅ Identity deployment completed"
+          else
+            echo "⚠️  No identity directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Deploy Security
+        if: env.DEPLOYMENT_SCOPE == 'all' || env.DEPLOYMENT_SCOPE == 'security'
+        run: |
+          echo "🛡️ Deploying Security infrastructure..."
+          if [ -d "security" ]; then
+            cd security
+            
+            # Initialize Terraform
+            terraform init \
+              -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+              -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+              -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+              -backend-config="key=platform/security/terraform.tfstate"
+            
+            # Plan deployment
+            terraform plan -out=security-plan
+            
+            # Apply deployment
+            if [ "$AUTO_APPROVE" = "true" ]; then
+              terraform apply security-plan
+            else
+              terraform apply -auto-approve security-plan
+            fi
+            
+            echo "✅ Security deployment completed"
+          else
+            echo "⚠️  No security directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Validate Platform Deployment
+        run: |
+          echo "🔍 Validating platform deployment..."
+          
+          # Check management group hierarchy
+          if [ -d "management-groups" ]; then
+            echo "✅ Management group hierarchy deployed"
+            az account management-group list --output table
+          fi
+          
+          # Check connectivity resources
+          if [ -d "connectivity" ]; then
+            echo "✅ Connectivity infrastructure deployed"
+            az network vnet list --output table
+          fi
+          
+          # Check identity resources
+          if [ -d "identity" ]; then
+            echo "✅ Identity infrastructure deployed"
+            az ad app list --output table
+          fi
+          
+          # Check security resources
+          if [ -d "security" ]; then
+            echo "✅ Security infrastructure deployed"
+            az policy assignment list --output table
+          fi
+          
+          echo "✅ Platform deployment validation completed"
+        continue-on-error: true
+      
+      - name: Notify Subscription Teams
+        if: always()
+        run: |
+          echo "📢 Notifying subscription teams of platform changes..."
+          
+          # This would typically send notifications to teams managing subscription repositories
+          # For now, we'll create a notification file
+          cat > platform-deployment-notification.md << EOF
+          # Platform Deployment Notification
+          
+          **Date**: $(date)
+          **Scope**: ${{ env.DEPLOYMENT_SCOPE }}
+          **Status**: ${{ job.status }}
+          **Repository**: ${{ github.repository }}
+          **Commit**: ${{ github.sha }}
+          **Actor**: ${{ github.actor }}
+          
+          ## Impact
+          This platform deployment may affect your subscription infrastructure.
+          Please review and update your subscription configurations if necessary.
+          
+          ## Next Steps
+          1. Review subscription dependencies
+          2. Update subscription configurations if needed
+          3. Test subscription deployments
+          4. Deploy subscription changes
+          EOF
+          
+          echo "✅ Platform deployment notification created"
+        continue-on-error: true
+      
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#platform-alerts'
+          text: |
+            🏗️ **Platform Deployment ${{ job.status }}**
+            
+            **Scope**: ${{ env.DEPLOYMENT_SCOPE }}
+            **Repository**: ${{ github.repository }}
+            **Branch**: ${{ github.ref }}
+            **Commit**: ${{ github.sha }}
+            **Actor**: ${{ github.actor }}
+            
+            **Workflow**: ${{ github.workflow }}
+            **Run ID**: ${{ github.run_id }}
+            
+            View details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+      
+      - name: Update Platform Status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Platform deployment completed successfully"
+            echo "Platform is ready for subscription deployments"
+          else
+            echo "❌ Platform deployment failed"
+            echo "Please review and fix issues before proceeding"
+            exit 1
+          fi
+

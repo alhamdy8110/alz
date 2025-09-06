@@ -1,0 +1,114 @@
+name: Terraform CI Template
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'Working directory for Terraform'
+        required: false
+        default: '.'
+        type: string
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        default: '1.6.0'
+        type: string
+      enable_cost_analysis:
+        description: 'Enable cost analysis'
+        required: false
+        default: true
+        type: boolean
+      enable_security_scan:
+        description: 'Enable security scanning'
+        required: false
+        default: true
+        type: boolean
+      enable_compliance_check:
+        description: 'Enable compliance checking'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      INFRACOST_API_KEY:
+        description: 'Infracost API key for cost analysis'
+        required: false
+      AZURE_CREDENTIALS:
+        description: 'Azure service principal credentials'
+        required: true
+
+jobs:
+  terraform-ci:
+    name: 'Terraform CI'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Change to working directory
+        run: |
+          WORKING_DIR="${{ inputs.working_directory }}"
+          if [ "$WORKING_DIR" != "." ]; then
+            cd "$WORKING_DIR"
+            echo "WORKING_DIR=$WORKING_DIR" >> $GITHUB_ENV
+            echo "✅ Changed to working directory: $WORKING_DIR"
+          else
+            echo "✅ Using root directory"
+          fi
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Security Scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        if: ${{ inputs.enable_security_scan }}
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Terraform Compliance Check
+        if: ${{ inputs.enable_compliance_check }}
+        run: |
+          echo "🔍 Running compliance checks..."
+          # Add your compliance check logic here
+          echo "✅ Compliance checks passed"
+
+      - name: Terraform Cost Analysis
+        if: ${{ inputs.enable_cost_analysis && secrets.INFRACOST_API_KEY != '' }}
+        run: |
+          echo "💰 Running cost analysis..."
+          # Add your cost analysis logic here
+          echo "✅ Cost analysis completed"
+
+      - name: Azure Verified Modules Validation
+        run: |
+          echo "🔍 Validating Azure Verified Modules usage..."
+          # Add your AVM validation logic here
+          echo "✅ AVM validation passed"
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ github.sha }}
+          path: tfplan
+

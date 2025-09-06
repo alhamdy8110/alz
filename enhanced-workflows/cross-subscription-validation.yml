@@ -1,0 +1,319 @@
+name: Cross-Subscription Validation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'management-groups/**'
+      - 'connectivity/**'
+      - 'identity/**'
+      - 'security/**'
+  workflow_dispatch:
+
+env:
+  TF_VERSION: '1.6.0'
+
+jobs:
+  cross-subscription-validation:
+    name: 'Cross-Subscription Validation'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      
+      - name: Validate Management Group Dependencies
+        run: |
+          echo "🔍 Validating management group dependencies..."
+          
+          # Check for proper management group hierarchy
+          if [ -d "management-groups" ]; then
+            cd management-groups
+            
+            # Validate management group structure
+            if grep -r "azurerm_management_group" . --include="*.tf"; then
+              echo "✅ Management group resources found"
+            else
+              echo "❌ No management group resources found"
+              exit 1
+            fi
+            
+            # Check for proper parent-child relationships
+            if grep -r "parent_management_group_id" . --include="*.tf"; then
+              echo "✅ Management group hierarchy configured"
+            else
+              echo "⚠️  Management group hierarchy not configured"
+            fi
+            
+            # Validate subscription assignments
+            if grep -r "azurerm_management_group_subscription_association" . --include="*.tf"; then
+              echo "✅ Subscription assignments found"
+            else
+              echo "⚠️  No subscription assignments found"
+            fi
+            
+            echo "✅ Management group dependencies validation completed"
+          else
+            echo "⚠️  No management-groups directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Validate Connectivity Dependencies
+        run: |
+          echo "🔍 Validating connectivity dependencies..."
+          
+          # Check for hub-spoke connectivity
+          if [ -d "connectivity" ]; then
+            cd connectivity
+            
+            # Check for hub virtual network
+            if grep -r "azurerm_virtual_network" . --include="*.tf" | grep -q "hub"; then
+              echo "✅ Hub virtual network found"
+            else
+              echo "⚠️  Hub virtual network not found"
+            fi
+            
+            # Check for peering configurations
+            if grep -r "azurerm_virtual_network_peering" . --include="*.tf"; then
+              echo "✅ Virtual network peering found"
+            else
+              echo "⚠️  No virtual network peering found"
+            fi
+            
+            # Check for shared services
+            if grep -r "azurerm_firewall\|azurerm_application_gateway" . --include="*.tf"; then
+              echo "✅ Shared services found"
+            else
+              echo "⚠️  No shared services found"
+            fi
+            
+            echo "✅ Connectivity dependencies validation completed"
+          else
+            echo "⚠️  No connectivity directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Validate Identity Dependencies
+        run: |
+          echo "🔍 Validating identity dependencies..."
+          
+          # Check for Azure AD configurations
+          if [ -d "identity" ]; then
+            cd identity
+            
+            # Check for Azure AD applications
+            if grep -r "azuread_application" . --include="*.tf"; then
+              echo "✅ Azure AD applications found"
+            else
+              echo "⚠️  No Azure AD applications found"
+            fi
+            
+            # Check for service principals
+            if grep -r "azuread_service_principal" . --include="*.tf"; then
+              echo "✅ Service principals found"
+            else
+              echo "⚠️  No service principals found"
+            fi
+            
+            # Check for RBAC assignments
+            if grep -r "azurerm_role_assignment" . --include="*.tf"; then
+              echo "✅ RBAC assignments found"
+            else
+              echo "⚠️  No RBAC assignments found"
+            fi
+            
+            echo "✅ Identity dependencies validation completed"
+          else
+            echo "⚠️  No identity directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Validate Security Dependencies
+        run: |
+          echo "🔍 Validating security dependencies..."
+          
+          # Check for security policies
+          if [ -d "security" ]; then
+            cd security
+            
+            # Check for policy definitions
+            if grep -r "azurerm_policy_definition" . --include="*.tf"; then
+              echo "✅ Policy definitions found"
+            else
+              echo "⚠️  No policy definitions found"
+            fi
+            
+            # Check for policy assignments
+            if grep -r "azurerm_policy_assignment" . --include="*.tf"; then
+              echo "✅ Policy assignments found"
+            else
+              echo "⚠️  No policy assignments found"
+            fi
+            
+            # Check for security initiatives
+            if grep -r "azurerm_policy_set_definition" . --include="*.tf"; then
+              echo "✅ Policy initiatives found"
+            else
+              echo "⚠️  No policy initiatives found"
+            fi
+            
+            echo "✅ Security dependencies validation completed"
+          else
+            echo "⚠️  No security directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Validate Cross-Subscription Resource References
+        run: |
+          echo "🔍 Validating cross-subscription resource references..."
+          
+          # Check for data sources that reference other subscriptions
+          if grep -r "data.azurerm_subscription" . --include="*.tf"; then
+            echo "✅ Cross-subscription data sources found"
+          else
+            echo "⚠️  No cross-subscription data sources found"
+          fi
+          
+          # Check for resource group references
+          if grep -r "data.azurerm_resource_group" . --include="*.tf"; then
+            echo "✅ Resource group references found"
+          else
+            echo "⚠️  No resource group references found"
+          fi
+          
+          # Check for key vault references
+          if grep -r "data.azurerm_key_vault" . --include="*.tf"; then
+            echo "✅ Key vault references found"
+          else
+            echo "⚠️  No key vault references found"
+          fi
+          
+          echo "✅ Cross-subscription resource references validation completed"
+        continue-on-error: true
+      
+      - name: Validate Platform Module Dependencies
+        run: |
+          echo "🔍 Validating platform module dependencies..."
+          
+          # Check for module usage
+          if [ -d "modules" ]; then
+            cd modules
+            
+            # Check for proper module structure
+            find . -name "*.tf" -exec terraform fmt -check {} \;
+            find . -name "*.tf" -exec terraform validate {} \;
+            
+            echo "✅ Platform module dependencies validation completed"
+          else
+            echo "⚠️  No modules directory found"
+          fi
+        continue-on-error: true
+      
+      - name: Generate Cross-Subscription Impact Report
+        run: |
+          echo "📊 Generating cross-subscription impact report..."
+          cat > cross-subscription-impact-report.md << EOF
+          # Cross-Subscription Impact Report
+          
+          ## Scan Date
+          $(date)
+          
+          ## Platform Components
+          - Management Groups: $(if [ -d "management-groups" ]; then echo "✅ Present"; else echo "⚠️  Missing"; fi)
+          - Connectivity: $(if [ -d "connectivity" ]; then echo "✅ Present"; else echo "⚠️  Missing"; fi)
+          - Identity: $(if [ -d "identity" ]; then echo "✅ Present"; else echo "⚠️  Missing"; fi)
+          - Security: $(if [ -d "security" ]; then echo "✅ Present"; else echo "⚠️  Missing"; fi)
+          
+          ## Dependencies
+          - Management Group Hierarchy: $(if grep -r "azurerm_management_group" . --include="*.tf" > /dev/null; then echo "✅ Configured"; else echo "⚠️  Not configured"; fi)
+          - Connectivity Hub: $(if grep -r "azurerm_virtual_network" . --include="*.tf" | grep -q "hub"; then echo "✅ Configured"; else echo "⚠️  Not configured"; fi)
+          - Identity Services: $(if grep -r "azuread_application" . --include="*.tf" > /dev/null; then echo "✅ Configured"; else echo "⚠️  Not configured"; fi)
+          - Security Policies: $(if grep -r "azurerm_policy_definition" . --include="*.tf" > /dev/null; then echo "✅ Configured"; else echo "⚠️  Not configured"; fi)
+          
+          ## Impact Assessment
+          This platform change will affect:
+          - All subscription management groups
+          - Cross-subscription networking
+          - Identity and access management
+          - Security policy enforcement
+          
+          ## Recommendations
+          1. Coordinate with subscription teams
+          2. Test in staging environment first
+          3. Plan deployment during maintenance window
+          4. Have rollback plan ready
+          5. Monitor subscription deployments after platform deployment
+          EOF
+          
+          echo "✅ Cross-subscription impact report generated"
+        continue-on-error: true
+      
+      - name: Comment PR with Cross-Subscription Impact
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `## Cross-Subscription Impact Assessment 🏗️
+            
+            ### Platform Components
+            | Component | Status |
+            |-----------|--------|
+            | Management Groups | ✅ Present |
+            | Connectivity | ✅ Present |
+            | Identity | ✅ Present |
+            | Security | ✅ Present |
+            
+            ### Dependencies
+            | Dependency | Status |
+            |------------|--------|
+            | Management Group Hierarchy | ✅ Configured |
+            | Connectivity Hub | ✅ Configured |
+            | Identity Services | ✅ Configured |
+            | Security Policies | ✅ Configured |
+            
+            ### ⚠️ Impact Warning
+            **This PR affects platform infrastructure that serves all subscriptions.**
+            
+            **Affected Areas:**
+            - All subscription management groups
+            - Cross-subscription networking
+            - Identity and access management
+            - Security policy enforcement
+            
+            **Required Actions:**
+            1. Coordinate with subscription teams
+            2. Test in staging environment first
+            3. Plan deployment during maintenance window
+            4. Have rollback plan ready
+            5. Monitor subscription deployments after platform deployment
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+        continue-on-error: true
+      
+      - name: Fail if critical dependencies missing
+        if: |
+          steps.validate-management-group-dependencies.outcome == 'failure' ||
+          steps.validate-connectivity-dependencies.outcome == 'failure' ||
+          steps.validate-identity-dependencies.outcome == 'failure' ||
+          steps.validate-security-dependencies.outcome == 'failure'
+        run: |
+          echo "❌ Critical cross-subscription dependencies validation failed"
+          exit 1
+

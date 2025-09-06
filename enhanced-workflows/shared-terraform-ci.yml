@@ -1,0 +1,254 @@
+name: Terraform CI
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+      terraform_version:
+        required: false
+        type: string
+        default: '1.6.0'
+      enable_cost_analysis:
+        required: false
+        type: boolean
+        default: true
+      enable_security_scan:
+        required: false
+        type: boolean
+        default: true
+      enable_compliance_check:
+        required: false
+        type: boolean
+        default: true
+      enable_azure_modules_validation:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      INFRACOST_API_KEY:
+        required: false
+      AZURE_CREDENTIALS:
+        required: false
+
+env:
+  TF_VERSION: ${{ inputs.terraform_version }}
+  TF_LOG: INFO
+  WORKING_DIR: ${{ inputs.working_directory }}
+
+jobs:
+  terraform-ci:
+    name: 'Terraform CI'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      
+      - name: Change to working directory
+        run: |
+          if [ "${{ env.WORKING_DIR }}" != "." ]; then
+            cd "${{ env.WORKING_DIR }}"
+            echo "WORKING_DIR=${{ env.WORKING_DIR }}" >> $GITHUB_ENV
+          fi
+      
+      - name: Validate Azure Verified Modules
+        if: inputs.enable_azure_modules_validation
+        run: |
+          echo "🔍 Validating Azure Verified Modules usage..."
+          
+          # Check for approved module sources
+          if ! grep -r "source.*Azure/" . --include="*.tf" | grep -q "Azure/vnet\|Azure/keyvault\|Azure/storage\|Azure/monitoring\|Azure/security"; then
+            echo "❌ No Azure Verified Modules found"
+            exit 1
+          fi
+          
+          # Check for unapproved module sources
+          if grep -r "source.*Azure/" . --include="*.tf" | grep -v "Azure/vnet\|Azure/keyvault\|Azure/storage\|Azure/monitoring\|Azure/security\|Azure/aks\|Azure/vm"; then
+            echo "❌ Unapproved Azure Verified Module detected"
+            exit 1
+          fi
+          
+          # Ensure all modules use version constraints
+          if grep -r "source.*Azure/" . --include="*.tf" | grep -v "version.*="; then
+            echo "❌ Module version constraint missing"
+            exit 1
+          fi
+          
+          echo "✅ All modules are approved Azure Verified Modules with version constraints"
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: |
+          terraform fmt -check -recursive -diff
+          echo "format_check_passed=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init -backend=false
+          echo "init_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Terraform Validate
+        id: validate
+        run: |
+          terraform validate
+          echo "validate_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Run TFSec Security Scan
+        if: inputs.enable_security_scan
+        id: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ${{ env.WORKING_DIR }}
+          soft_fail: true
+          format: sarif
+          output_file_path: tfsec-results.sarif
+        continue-on-error: true
+      
+      - name: Run Checkov Security Scan
+        if: inputs.enable_security_scan
+        id: checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ${{ env.WORKING_DIR }}
+          framework: terraform
+          soft_fail: true
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+        continue-on-error: true
+      
+      - name: Run Trivy Security Scan
+        if: inputs.enable_security_scan
+        id: trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: ${{ env.WORKING_DIR }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+      
+      - name: Upload Security Results
+        if: inputs.enable_security_scan
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: |
+            tfsec-results.sarif
+            checkov-results.sarif
+            trivy-results.sarif
+        continue-on-error: true
+      
+      - name: Run Compliance Check
+        if: inputs.enable_compliance_check
+        id: compliance
+        run: |
+          echo "🔍 Running compliance validation..."
+          
+          # Check for required tags
+          if ! grep -r "tags.*=" . --include="*.tf" | grep -q "Environment\|Project\|Owner"; then
+            echo "❌ Required tags missing"
+            exit 1
+          fi
+          
+          # Check for security configurations
+          if ! grep -r "enable_https_traffic_only.*=.*true" . --include="*.tf"; then
+            echo "⚠️  HTTPS traffic only not enforced"
+          fi
+          
+          # Check for monitoring configurations
+          if ! grep -r "monitoring.*=" . --include="*.tf" | grep -q "true"; then
+            echo "⚠️  Monitoring not enabled"
+          fi
+          
+          echo "✅ Compliance check completed"
+        continue-on-error: true
+      
+      - name: Run Infracost Cost Analysis
+        if: inputs.enable_cost_analysis && secrets.INFRACOST_API_KEY
+        id: infracost
+        uses: infracost/infracost-gh-action@v0.12
+        with:
+          api_key: ${{ secrets.INFRACOST_API_KEY }}
+          path: ${{ env.WORKING_DIR }}
+          terraform_plan_flags: -var-file=terraform.tfvars.example
+        continue-on-error: true
+      
+      - name: Comment PR with cost estimate
+        if: github.event_name == 'pull_request' && inputs.enable_cost_analysis && secrets.INFRACOST_API_KEY
+        uses: infracost/infracost-gh-action@v0.12
+        with:
+          api_key: ${{ secrets.INFRACOST_API_KEY }}
+          path: ${{ env.WORKING_DIR }}
+          terraform_plan_flags: -var-file=terraform.tfvars.example
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          behavior: update
+        continue-on-error: true
+      
+      - name: Run Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan
+          echo "plan_exit_code=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Generate PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform CI Results 🚀
+            
+            | Check | Status |
+            |-------|--------|
+            | Format | ${{ steps.fmt.outputs.format_check_passed == '0' ? '✅' : '❌' }} |
+            | Init | ${{ steps.init.outputs.init_exit_code == '0' ? '✅' : '❌' }} |
+            | Validate | ${{ steps.validate.outputs.validate_exit_code == '0' ? '✅' : '❌' }} |
+            | Plan | ${{ steps.plan.outputs.plan_exit_code == '0' ? '✅' : '❌' }} |
+            | Security Scan | ${{ steps.tfsec.outcome == 'success' ? '✅' : '⚠️' }} |
+            | Compliance Check | ${{ steps.compliance.outcome == 'success' ? '✅' : '⚠️' }} |
+            | Cost Analysis | ${{ steps.infracost.outcome == 'success' ? '✅' : '⚠️' }} |
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+        continue-on-error: true
+      
+      - name: Fail if critical steps failed
+        if: |
+          steps.fmt.outputs.format_check_passed != '0' ||
+          steps.init.outputs.init_exit_code != '0' ||
+          steps.validate.outputs.validate_exit_code != '0'
+        run: |
+          echo "❌ Critical Terraform CI steps failed"
+          exit 1
+

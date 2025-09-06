@@ -1,0 +1,70 @@
+# Example Terraform variables file
+# Copy this file to terraform.tfvars and update the values
+
+# Environment Configuration
+environment = "dev"  # Options: dev, prod, sandbox
+location    = "East US"
+
+# Azure Configuration
+subscription_id = "your-subscription-id"
+tenant_id       = "your-tenant-id"
+client_id       = "your-client-id"       # Optional: for local development
+client_secret   = "your-client-secret"   # Optional: for local development
+
+# Business Unit Configuration
+business_unit = "ITS"  # Options: ITS, BS, DG
+project_name  = "alz"
+organization_name = "company"
+
+# Resource Group Configuration
+resource_group_name     = "rg-company-alz-its-dev"
+resource_group_location = "East US"
+
+# Network Configuration
+vnet_address_space = ["10.0.0.0/16"]
+
+subnet_configs = {
+  "subnet-1" = {
+    address_prefixes = ["10.0.1.0/24"]
+    service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+  }
+  "subnet-2" = {
+    address_prefixes = ["10.0.2.0/24"]
+    service_endpoints = ["Microsoft.Storage"]
+  }
+}
+
+# Security Configuration
+allowed_ip_ranges = [
+  "203.0.113.0/24",  # Example: Office network
+  "198.51.100.0/24"  # Example: VPN network
+]
+
+enable_ddos_protection = true
+
+# Monitoring Configuration
+enable_monitoring = true
+log_retention_days = 30
+
+# Cost Management Configuration
+budget_amount = 1000
+budget_alert_thresholds = [50, 75, 90, 100]
+
+# Compliance Configuration
+enable_policy_enforcement = true
+compliance_standards = ["CIS", "NIST", "SOC2"]
+
+# Common Tags
+common_tags = {
+  Environment   = "dev"
+  Project       = "Azure Landing Zone"
+  Owner         = "DevOps Team"
+  CostCenter    = "IT"
+  Compliance    = "Required"
+  Backup        = "Required"
+  Monitoring    = "Required"
+  BusinessUnit  = "ITS"
+  Application   = "Platform"
+  DataClassification = "Internal"
+}
+

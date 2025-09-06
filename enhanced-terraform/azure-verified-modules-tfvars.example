@@ -1,0 +1,52 @@
+# Example Terraform variables file for Azure Verified Modules
+# Copy this file to terraform.tfvars and update the values
+
+# Environment Configuration
+environment = "dev"  # Options: dev, prod, sandbox
+location    = "East US"
+
+# Azure Provider Configuration
+subscription_id = "your-subscription-id"
+tenant_id       = "your-tenant-id"
+client_id       = "your-client-id"       # Optional: for local development
+client_secret   = "your-client-secret"   # Optional: for local development
+
+# Business Configuration
+organization_name = "company"
+project_name      = "alz"
+business_unit     = "ITS"  # Options: ITS, BS, DG
+
+# Network Configuration
+address_space = ["10.0.0.0/16"]
+subnet_prefixes = ["10.0.1.0/24", "10.0.2.0/24"]
+subnet_names = ["subnet-1", "subnet-2"]
+
+# Security Configuration
+allowed_ip_ranges = [
+  "203.0.113.0/24",  # Example: Office network
+  "198.51.100.0/24"  # Example: VPN network
+]
+
+# Monitoring Configuration
+log_retention_days = 30
+
+# Compute Configuration
+create_vm = false
+create_aks = false
+kubernetes_version = "1.28"
+
+# Cost Management
+budget_amount = 1000
+
+# Compliance
+enable_compliance = true
+
+# Additional Tags
+additional_tags = {
+  CostCenter    = "IT"
+  Compliance    = "Required"
+  Backup        = "Required"
+  Monitoring    = "Required"
+  DataClassification = "Internal"
+}
+
