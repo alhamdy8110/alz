@@ -31,4 +31,8 @@ jobs:
     secrets:
       INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      TF_STATE_RG: ${{ secrets.TF_STATE_RG }}
+      TF_STATE_SA: ${{ secrets.TF_STATE_SA }}
+      TF_STATE_CONTAINER: ${{ secrets.TF_STATE_CONTAINER }}
+      TF_STATE_KEY: ${{ secrets.TF_STATE_KEY }}
 

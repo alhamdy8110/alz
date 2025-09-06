@@ -167,6 +167,16 @@ gh workflow run terraform-deploy-required.yml -f working_directory=environments/
 
 ### **Repository Structure**
 ```
+alz-platform/                          # Central platform repository
+├── .github/workflows/                 # Platform workflows
+├── modules/                           # Reusable Terraform modules
+├── environments/                      # Platform configurations
+│   ├── management/                   # Management group hierarchy
+│   ├── connectivity/                 # Hub-spoke networking
+│   ├── identity/                     # Azure AD configurations
+│   └── security/                     # Security policies and initiatives
+└── docs/                             # Documentation
+
 infra-ci-cd/                           # Centralized caller workflows
 infra-ci-templates/                    # Centralized templates
 company-its-dev-tf/                   # Development subscription
@@ -175,6 +185,39 @@ company-bs-dev-tf/                    # Business unit dev
 company-bs-prod-tf/                   # Business unit prod
 company-dg-dev-tf/                    # Data governance dev
 company-dg-prod-tf/                   # Data governance prod
+```
+
+### **State Management Architecture**
+
+This implementation uses the **Manual Bootstrap + Pipeline Management** approach:
+
+1. **Manual Bootstrap**: State infrastructure is created manually using the provided script
+2. **Pipeline Management**: All infrastructure deployments use the established state system
+
+#### **State Storage Structure**
+```
+rg-alz-state/                          # Central state resource group
+├── stalzplatformstate                 # Platform state storage account
+│   └── tfstate/
+│       └── platform/terraform.tfstate # Single platform state
+├── stalzitsdevstate                   # ITS Dev state storage account
+│   └── tfstate/
+│       └── its-dev/terraform.tfstate  # ITS Dev state
+├── stalzitsprodstate                  # ITS Prod state storage account
+│   └── tfstate/
+│       └── its-prod/terraform.tfstate # ITS Prod state
+├── stalzbsdevstate                    # BS Dev state storage account
+│   └── tfstate/
+│       └── bs-dev/terraform.tfstate   # BS Dev state
+├── stalzbsprodstate                   # BS Prod state storage account
+│   └── tfstate/
+│       └── bs-prod/terraform.tfstate  # BS Prod state
+├── stalzdgdevstate                    # DG Dev state storage account
+│   └── tfstate/
+│       └── dg-dev/terraform.tfstate   # DG Dev state
+└── stalzdgprodstate                   # DG Prod state storage account
+    └── tfstate/
+        └── dg-prod/terraform.tfstate  # DG Prod state
 ```
 
 ### **Required Secrets (in infra-ci-cd)**
@@ -254,13 +297,53 @@ company-dg-prod-tf/                   # Data governance prod
 
 **Solution**: Check that the GitHub Ruleset is configured correctly and points to the right workflow in `infra-ci-cd`.
 
+## State Management Best Practices
+
+### **Enhanced State Management Features**
+
+1. **State File Health Check**
+   - Monitors state file size and age
+   - Alerts if state file exceeds 100MB
+   - Provides visibility into state file status
+
+2. **Automatic State Backup**
+   - Creates timestamped backups before apply operations
+   - Enables recovery from failed deployments
+   - Prevents state loss during operations
+
+3. **State Locking**
+   - Uses Azure AD authentication for state locking
+   - Prevents concurrent modifications
+   - Ensures state consistency
+
+4. **State Drift Detection**
+   - Detects changes between desired and actual state
+   - Provides early warning of configuration drift
+   - Helps maintain infrastructure consistency
+
+5. **Detailed Plan Output**
+   - Uses `-detailed-exitcode` for better plan handling
+   - Distinguishes between no changes, changes, and errors
+   - Provides clear feedback on plan results
+
+### **Bootstrap Process**
+
+1. **Run Bootstrap Script**: Execute `bootstrap-state-infrastructure.sh` once to create state infrastructure
+2. **Configure GitHub Secrets**: Set up state parameters in all repositories
+3. **Test Workflows**: Verify all workflows function correctly
+4. **Deploy Infrastructure**: Use pipelines to deploy your infrastructure
+
+See [BOOTSTRAP_GUIDE.md](./BOOTSTRAP_GUIDE.md) for detailed bootstrap instructions.
+
 ## Best Practices
 
 1. **Parameter Passing**: Always specify explicit parameters instead of relying on detection
 2. **Directory Structure**: Maintain consistent directory structure across repositories
 3. **Secrets Management**: Use environment-specific secrets in both `infra-ci-cd` and `infra-ci-templates`
-4. **Testing**: Test workflows with manual triggers first before enabling automatic triggers
-5. **Monitoring**: Monitor workflow execution and failures in both repositories
-6. **Documentation**: Keep this README updated with changes
-7. **Centralization**: Keep all caller workflows in `infra-ci-cd` and all templates in `infra-ci-templates`
-8. **Simplicity**: Prefer direct parameter passing over complex detection logic
+4. **State Management**: Use manual bootstrap for state infrastructure, pipelines for infrastructure management
+5. **Testing**: Test workflows with manual triggers first before enabling automatic triggers
+6. **Monitoring**: Monitor workflow execution and failures in both repositories
+7. **Documentation**: Keep this README updated with changes
+8. **Centralization**: Keep all caller workflows in `infra-ci-cd` and all templates in `infra-ci-templates`
+9. **Simplicity**: Prefer direct parameter passing over complex detection logic
+10. **State Security**: Use Azure AD authentication and proper access controls for state management

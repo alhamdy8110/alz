@@ -34,6 +34,18 @@ on:
       AZURE_CREDENTIALS:
         description: 'Azure service principal credentials'
         required: true
+      TF_STATE_RG:
+        description: 'Terraform state resource group'
+        required: true
+      TF_STATE_SA:
+        description: 'Terraform state storage account'
+        required: true
+      TF_STATE_CONTAINER:
+        description: 'Terraform state container'
+        required: true
+      TF_STATE_KEY:
+        description: 'Terraform state key'
+        required: true
 
 jobs:
   terraform-ci:
@@ -62,11 +74,36 @@ jobs:
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
 
-      - name: Terraform Init
-        run: terraform init -backend=false
+      - name: Terraform Init (CI Mode)
+        run: |
+          echo "🔧 Initializing Terraform for CI validation..."
+          terraform init -backend=false
 
       - name: Terraform Validate
-        run: terraform validate
+        run: |
+          echo "✅ Validating Terraform configuration..."
+          terraform validate
+
+      - name: Terraform Init with Backend (for State Validation)
+        run: |
+          echo "🔧 Initializing Terraform with backend for state validation..."
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
+            -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: State Drift Detection
+        run: |
+          echo "🔍 Checking for state drift..."
+          terraform plan -detailed-exitcode
+          case $? in
+            0) echo "✅ No changes detected - no drift" ;;
+            1) echo "❌ Error in plan - check configuration" && exit 1 ;;
+            2) echo "⚠️ Changes detected - potential drift found" ;;
+          esac
 
       - name: Terraform Security Scan
         if: ${{ inputs.enable_security_scan }}

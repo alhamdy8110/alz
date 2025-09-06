@@ -69,19 +69,87 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Terraform Init
+      - name: State File Health Check
         run: |
+          echo "🔍 Checking state file health..."
+          STATE_INFO=$(az storage blob show \
+            --container-name ${{ secrets.TF_STATE_CONTAINER }} \
+            --name ${{ secrets.TF_STATE_KEY }} \
+            --account-name ${{ secrets.TF_STATE_SA }} \
+            --query '{size:properties.contentLength,lastModified:properties.lastModified}' -o json 2>/dev/null || echo '{"size":0,"lastModified":"N/A"}')
+          
+          echo "State file info: $STATE_INFO"
+          
+          # Alert if state file is too large (>100MB)
+          STATE_SIZE=$(echo $STATE_INFO | jq -r '.size // 0')
+          if [ $STATE_SIZE -gt 104857600 ]; then
+            echo "⚠️ Warning: State file is larger than 100MB"
+          fi
+
+      - name: Backup State Before Apply
+        run: |
+          echo "💾 Creating state backup before apply..."
+          BACKUP_KEY="${{ secrets.TF_STATE_KEY }}.backup.$(date +%Y%m%d-%H%M%S)"
+          
+          # Check if state file exists before backing up
+          if az storage blob exists \
+            --container-name ${{ secrets.TF_STATE_CONTAINER }} \
+            --name ${{ secrets.TF_STATE_KEY }} \
+            --account-name ${{ secrets.TF_STATE_SA }} \
+            --query exists -o tsv | grep -q true; then
+            
+            az storage blob copy start \
+              --source-container ${{ secrets.TF_STATE_CONTAINER }} \
+              --source-blob ${{ secrets.TF_STATE_KEY }} \
+              --destination-container ${{ secrets.TF_STATE_CONTAINER }} \
+              --destination-blob "$BACKUP_KEY" \
+              --account-name ${{ secrets.TF_STATE_SA }}
+            
+            echo "✅ State backup created: $BACKUP_KEY"
+          else
+            echo "ℹ️ No existing state file to backup (first deployment)"
+          fi
+
+      - name: Terraform Init with State Locking
+        run: |
+          echo "🔧 Initializing Terraform with state backend..."
           terraform init \
             -backend-config="resource_group_name=${{ secrets.TF_STATE_RG }}" \
             -backend-config="storage_account_name=${{ secrets.TF_STATE_SA }}" \
             -backend-config="container_name=${{ secrets.TF_STATE_CONTAINER }}" \
-            -backend-config="key=${{ secrets.TF_STATE_KEY }}"
+            -backend-config="key=${{ secrets.TF_STATE_KEY }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
 
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
+      - name: Terraform Plan with Detailed Exit Code
+        id: plan
+        run: |
+          echo "📋 Running Terraform plan..."
+          terraform plan -out=tfplan -detailed-exitcode
+        continue-on-error: true
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "❌ Terraform plan failed"
+          exit 1
+
+      - name: Terraform Plan Changes
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 2
+        run: |
+          echo "📝 Terraform plan detected changes"
+          echo "Changes will be applied in the next step"
+
+      - name: Terraform Plan No Changes
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 0
+        run: |
+          echo "✅ No changes detected - infrastructure is up to date"
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 2
+        run: |
+          echo "🚀 Applying Terraform changes..."
+          terraform apply -auto-approve tfplan
 
       - name: Post-deployment Tests
         run: |
