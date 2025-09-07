@@ -1,0 +1,228 @@
+name: Promote to Production
+on:
+  workflow_run:
+    workflows: ["terraform-deploy-required"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  promote:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: promotion
+    steps:
+      - name: Checkout Dev Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PROMOTION_TOKEN }}
+          fetch-depth: 0
+
+      - name: Get Latest Commit Information
+        id: get_commit
+        run: |
+          echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_message=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+          echo "commit_author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
+          echo "commit_date=$(git log -1 --pretty=%ad --date=iso)" >> $GITHUB_OUTPUT
+
+      - name: Validate Dev Deployment
+        run: |
+          echo "🔍 Validating dev deployment success..."
+          echo "✅ Dev deployment completed successfully"
+          echo "📋 Commit: ${{ steps.get_commit.outputs.commit_sha }}"
+          echo "👤 Author: ${{ steps.get_commit.outputs.commit_author }}"
+          echo "📅 Date: ${{ steps.get_commit.outputs.commit_date }}"
+
+      - name: Checkout Production Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PROD_REPOSITORY }}
+          token: ${{ secrets.PROMOTION_TOKEN }}
+          path: prod-repo
+
+      - name: Configure Git for Production
+        run: |
+          cd prod-repo
+          git config user.name "DevOps Promotion Bot"
+          git config user.email "devops-bot@yourcompany.com"
+
+      - name: Sync Terraform Files to Production
+        run: |
+          echo "🔄 Syncing Terraform files to production..."
+          cd prod-repo
+          
+          # Copy main Terraform files
+          cp ../main.tf . 2>/dev/null || echo "⚠️ main.tf not found in dev"
+          cp ../variables.tf . 2>/dev/null || echo "⚠️ variables.tf not found in dev"
+          cp ../backend.tf . 2>/dev/null || echo "⚠️ backend.tf not found in dev"
+          cp ../outputs.tf . 2>/dev/null || echo "⚠️ outputs.tf not found in dev"
+          cp ../locals.tf . 2>/dev/null || echo "⚠️ locals.tf not found in dev"
+          
+          # Copy terraform.tfvars and update for production
+          if [ -f ../terraform.tfvars ]; then
+            cp ../terraform.tfvars ./terraform.tfvars
+            echo "✅ Copied terraform.tfvars"
+          else
+            echo "⚠️ terraform.tfvars not found in dev"
+          fi
+          
+          # Copy directories if they exist
+          if [ -d ../modules ]; then
+            cp -r ../modules . 2>/dev/null || echo "⚠️ Failed to copy modules"
+            echo "✅ Copied modules directory"
+          fi
+          
+          if [ -d ../policies ]; then
+            cp -r ../policies . 2>/dev/null || echo "⚠️ Failed to copy policies"
+            echo "✅ Copied policies directory"
+          fi
+          
+          if [ -d ../scripts ]; then
+            cp -r ../scripts . 2>/dev/null || echo "⚠️ Failed to copy scripts"
+            echo "✅ Copied scripts directory"
+          fi
+
+      - name: Update Environment-Specific Configuration
+        run: |
+          echo "🔧 Updating configuration for production environment..."
+          cd prod-repo
+          
+          # Update terraform.tfvars for production
+          if [ -f terraform.tfvars ]; then
+            # Replace dev-specific values with prod values
+            sed -i 's/environment = "dev"/environment = "prod"/g' terraform.tfvars
+            sed -i 's/name_prefix = "dev"/name_prefix = "prod"/g' terraform.tfvars
+            sed -i 's/environment_suffix = "dev"/environment_suffix = "prod"/g' terraform.tfvars
+            
+            # Update budget amounts for production
+            sed -i 's/budget_amount = 500/budget_amount = 5000/g' terraform.tfvars
+            
+            # Update log retention for production
+            sed -i 's/log_retention_days = 7/log_retention_days = 90/g' terraform.tfvars
+            
+            # Enable production features
+            sed -i 's/enable_ddos_protection = false/enable_ddos_protection = true/g' terraform.tfvars
+            
+            echo "✅ Updated terraform.tfvars for production"
+          fi
+          
+          # Update backend.tf if it exists
+          if [ -f backend.tf ]; then
+            sed -i 's/its-dev\/terraform.tfstate/its-prod\/terraform.tfstate/g' backend.tf
+            echo "✅ Updated backend.tf for production"
+          fi
+
+      - name: Validate Production Configuration
+        run: |
+          echo "🔍 Validating production configuration..."
+          cd prod-repo
+          
+          # Check if required files exist
+          if [ ! -f main.tf ]; then
+            echo "❌ main.tf is required but not found"
+            exit 1
+          fi
+          
+          if [ ! -f variables.tf ]; then
+            echo "❌ variables.tf is required but not found"
+            exit 1
+          fi
+          
+          echo "✅ Production configuration validation passed"
+
+      - name: Create Promotion Commit
+        run: |
+          cd prod-repo
+          
+          # Check if there are any changes
+          if git diff --quiet; then
+            echo "ℹ️ No changes to promote"
+            exit 0
+          fi
+          
+          # Create commit with detailed message
+          git add .
+          git commit -m "🚀 Promote from dev to production
+
+          Source: ${{ github.repository }}@${{ steps.get_commit.outputs.commit_sha }}
+          Original commit: ${{ steps.get_commit.outputs.commit_message }}
+          Author: ${{ steps.get_commit.outputs.commit_author }}
+          Date: ${{ steps.get_commit.outputs.commit_date }}
+          Promoted by: ${{ github.actor }}
+          Promotion date: $(date -u)
+
+          Changes:
+          - Updated Terraform configuration for production
+          - Adjusted environment-specific variables
+          - Enabled production security features
+          - Updated resource naming conventions"
+
+      - name: Push to Production Repository
+        run: |
+          cd prod-repo
+          git push origin main
+          echo "✅ Code successfully pushed to production repository"
+
+      - name: Create Production Deployment Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: '${{ vars.PROD_REPOSITORY }}'.split('/')[1],
+              title: `🚀 Production Deployment Ready - ${new Date().toISOString().split('T')[0]}`,
+              body: `## Production Deployment Ready
+              
+              **Source:** ${{ github.repository }}@${{ steps.get_commit.outputs.commit_sha }}
+              **Original Commit:** ${{ steps.get_commit.outputs.commit_message }}
+              **Author:** ${{ steps.get_commit.outputs.commit_author }}
+              **Promoted by:** ${{ github.actor }}
+              **Date:** ${new Date().toISOString()}
+              
+              ### Pre-Deployment Checklist
+              - [ ] Code review completed
+              - [ ] Security scan passed
+              - [ ] Terraform plan reviewed
+              - [ ] Production approval obtained
+              - [ ] Backup completed
+              - [ ] Monitoring configured
+              
+              ### Deployment Steps
+              1. Review the changes in this repository
+              2. Run \`terraform plan\` to verify changes
+              3. Approve the deployment
+              4. Monitor deployment progress
+              
+              ### Rollback Plan
+              - Previous commit: \`git log --oneline -2\`
+              - Rollback command: \`git revert HEAD\`
+              
+              ---
+              *This issue was automatically created by the promotion workflow*`,
+              labels: ['deployment', 'production', 'promotion']
+            });
+            
+            console.log(`Created issue: ${issue.data.html_url}`);
+
+      - name: Notify Promotion Success
+        run: |
+          echo "🎉 Code successfully promoted to production!"
+          echo "📋 Production repository: ${{ vars.PROD_REPOSITORY }}"
+          echo "🔗 View changes: https://github.com/${{ vars.PROD_REPOSITORY }}/compare/main"
+          
+          # Add Slack notification here if needed
+          # curl -X POST -H 'Content-type: application/json' \
+          #   --data '{"text":"🚀 Code promoted to production from ${{ github.repository }}"}' \
+          #   ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Log Promotion Activity
+        run: |
+          echo "📝 Logging promotion activity..."
+          echo "Promotion Details:" >> promotion.log
+          echo "Source Repository: ${{ github.repository }}" >> promotion.log
+          echo "Source Commit: ${{ steps.get_commit.outputs.commit_sha }}" >> promotion.log
+          echo "Target Repository: ${{ vars.PROD_REPOSITORY }}" >> promotion.log
+          echo "Promoted by: ${{ github.actor }}" >> promotion.log
+          echo "Promotion Date: $(date -u)" >> promotion.log
+          echo "Original Commit Message: ${{ steps.get_commit.outputs.commit_message }}" >> promotion.log
+          echo "---" >> promotion.log

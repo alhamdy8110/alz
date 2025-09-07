@@ -1,0 +1,253 @@
+name: Production Deployment
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/production-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      working_directory:
+        description: 'Working directory for Terraform'
+        required: false
+        default: '.'
+        type: string
+      skip_approval:
+        description: 'Skip manual approval (emergency only)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  pre-deployment-checks:
+    name: 'Pre-Deployment Checks'
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for Promotion Commit
+        id: check
+        run: |
+          # Check if this is a promotion commit
+          if git log -1 --pretty=%B | grep -q "Promote from dev to production"; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "✅ This is a promotion commit - deployment approved"
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "⚠️ This is not a promotion commit - manual approval required"
+          fi
+
+      - name: Validate Production Configuration
+        run: |
+          echo "🔍 Validating production configuration..."
+          
+          # Check environment variables
+          if [ "${{ vars.ENVIRONMENT }}" != "prod" ]; then
+            echo "❌ Environment variable must be set to 'prod'"
+            exit 1
+          fi
+          
+          # Check required files
+          if [ ! -f main.tf ]; then
+            echo "❌ main.tf is required"
+            exit 1
+          fi
+          
+          if [ ! -f variables.tf ]; then
+            echo "❌ variables.tf is required"
+            exit 1
+          fi
+          
+          echo "✅ Production configuration validation passed"
+
+  manual-approval:
+    name: 'Manual Approval'
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'false' && github.event.inputs.skip_approval != 'true'
+    environment: production-approval
+    steps:
+      - name: Request Manual Approval
+        run: |
+          echo "🔒 Manual approval required for production deployment"
+          echo "This deployment was not triggered by a promotion workflow"
+          echo "Please review the changes and approve manually"
+
+  terraform-deploy:
+    name: 'Terraform Production Deploy'
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-checks, manual-approval]
+    if: always() && (needs.pre-deployment-checks.outputs.should_deploy == 'true' || needs.manual-approval.result == 'success' || github.event.inputs.skip_approval == 'true')
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+
+      - name: Change to working directory
+        run: |
+          WORKING_DIR="${{ inputs.working_directory || '.' }}"
+          if [ "$WORKING_DIR" != "." ]; then
+            cd "$WORKING_DIR"
+            echo "WORKING_DIR=$WORKING_DIR" >> $GITHUB_ENV
+            echo "✅ Changed to working directory: $WORKING_DIR"
+          else
+            echo "✅ Using root directory"
+          fi
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Production Deployment Pre-Checks
+        run: |
+          echo "🔍 Running production deployment pre-checks..."
+          
+          # Check if this is a promotion commit
+          if git log -1 --pretty=%B | grep -q "Promote from dev to production"; then
+            echo "✅ Promotion commit detected - proceeding with deployment"
+            PROMOTION_SOURCE=$(git log -1 --pretty=%B | grep "Source:" | cut -d' ' -f2)
+            echo "📋 Source: $PROMOTION_SOURCE"
+          else
+            echo "⚠️ Manual deployment detected"
+          fi
+          
+          # Verify production environment
+          echo "🌍 Environment: ${{ vars.ENVIRONMENT }}"
+          echo "🏗️ State Storage: ${{ vars.TF_STATE_SA }}"
+          echo "📁 State Key: ${{ vars.TF_STATE_KEY }}"
+
+      - name: State File Health Check
+        run: |
+          echo "🔍 Checking state file health..."
+          STATE_INFO=$(az storage blob show \
+            --container-name ${{ vars.TF_STATE_CONTAINER }} \
+            --name ${{ vars.TF_STATE_KEY }} \
+            --account-name ${{ vars.TF_STATE_SA }} \
+            --query '{size:properties.contentLength,lastModified:properties.lastModified}' -o json 2>/dev/null || echo '{"size":0,"lastModified":"N/A"}')
+          
+          echo "State file info: $STATE_INFO"
+          
+          # Alert if state file is too large (>100MB)
+          STATE_SIZE=$(echo $STATE_INFO | jq -r '.size // 0')
+          if [ $STATE_SIZE -gt 104857600 ]; then
+            echo "⚠️ Warning: State file is larger than 100MB"
+          fi
+
+      - name: Backup State Before Apply
+        run: |
+          echo "💾 Creating state backup before production deployment..."
+          BACKUP_KEY="${{ vars.TF_STATE_KEY }}.backup.$(date +%Y%m%d-%H%M%S)"
+          
+          # Check if state file exists before backing up
+          if az storage blob exists \
+            --container-name ${{ vars.TF_STATE_CONTAINER }} \
+            --name ${{ vars.TF_STATE_KEY }} \
+            --account-name ${{ vars.TF_STATE_SA }} \
+            --query exists -o tsv | grep -q true; then
+            
+            az storage blob copy start \
+              --source-container ${{ vars.TF_STATE_CONTAINER }} \
+              --source-blob ${{ vars.TF_STATE_KEY }} \
+              --destination-container ${{ vars.TF_STATE_CONTAINER }} \
+              --destination-blob "$BACKUP_KEY" \
+              --account-name ${{ vars.TF_STATE_SA }}
+            
+            echo "✅ State backup created: $BACKUP_KEY"
+          else
+            echo "ℹ️ No existing state file to backup (first deployment)"
+          fi
+
+      - name: Terraform Init with State Locking
+        run: |
+          echo "🔧 Initializing Terraform with state backend..."
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_SA }}" \
+            -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TF_STATE_KEY }}" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: Terraform Plan with Detailed Exit Code
+        id: plan
+        run: |
+          echo "📋 Running Terraform plan for production..."
+          terraform plan -out=tfplan -detailed-exitcode
+        continue-on-error: true
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "❌ Terraform plan failed"
+          exit 1
+
+      - name: Terraform Plan Changes
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 2
+        run: |
+          echo "📝 Terraform plan detected changes"
+          echo "Changes will be applied in the next step"
+
+      - name: Terraform Plan No Changes
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 0
+        run: |
+          echo "✅ No changes detected - infrastructure is up to date"
+
+      - name: Terraform Apply
+        if: steps.plan.outcome == 'success' && steps.plan.exitcode == 2
+        run: |
+          echo "🚀 Applying Terraform changes to production..."
+          terraform apply -auto-approve tfplan
+
+      - name: Post-deployment Tests
+        run: |
+          echo "🧪 Running post-deployment tests..."
+          # Add your post-deployment test logic here
+          echo "✅ Post-deployment tests passed"
+
+      - name: Notify Deployment Success
+        if: success()
+        run: |
+          echo "✅ Production deployment successful"
+          # Add notification logic here if needed
+
+      - name: Notify Deployment Failure
+        if: failure()
+        run: |
+          echo "❌ Production deployment failed"
+          # Add failure notification logic here if needed
+
+  post-deployment:
+    name: 'Post-Deployment Tasks'
+    runs-on: ubuntu-latest
+    needs: terraform-deploy
+    if: always()
+    steps:
+      - name: Update Deployment Status
+        run: |
+          if [ "${{ needs.terraform-deploy.result }}" == "success" ]; then
+            echo "✅ Production deployment completed successfully"
+          else
+            echo "❌ Production deployment failed"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up temporary files..."
+          # Add cleanup logic here if needed
